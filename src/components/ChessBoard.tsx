@@ -3,6 +3,19 @@ import { View, Text, Pressable } from "react-native";
 import { game, BoardSquare } from "../../src/lib/chess";
 
 const SQUARE = 44; // personalize: make 36 for smaller squares or 60 for bigger
+function findKingSquare(color: "w" | "b", board: (BoardSquare | null)[][]): string | null {
+    for (let r = 0; r < 8; r++) {
+        for (let c = 0; c < 8; c++) {
+            const sq = board[r][c];
+            if (sq && sq.type === "k" && sq.color === color) {
+                const file = String.fromCharCode(97 + c);
+                const rank = String(8 - r);
+                return file + rank;
+            }
+        }
+    }
+    return null;
+}
 
 function algebraic(r: number, c: number) {
     const file = String.fromCharCode("a".charCodeAt(0) + c);
@@ -27,6 +40,14 @@ export default function ChessBoard() {
     const [targets, setTargets] = useState<Set<string>>(new Set());
     const [turn, setTurn] = useState<"w" | "b">(game.turn());
     const b = game.board();
+    const isCheck = game.isCheck();
+    const isMate = game.isCheckmate();
+    const isDrawn = game.isStalemate() || game.isDraw();
+    const result = game.winner(); // "w" | "b" | "draw" | null
+    // In chess.js, isCheck() is true for the side-to-move
+    const checkedKingSq = isCheck ? findKingSquare(turn, b) : null;
+
+
 
     const onSquarePress = (a: string) => {
         if (!selected) {
@@ -73,6 +94,7 @@ export default function ChessBoard() {
                             const a = algebraic(r, c);
                             const isDark = (r + c) % 2 === 1;
                             const isSelected = selected === a;
+                            const isCheckedKing = checkedKingSq === a;
                             return (
                                 <Pressable
                                     key={c}
@@ -80,8 +102,11 @@ export default function ChessBoard() {
                                     style={{
                                         width: SQUARE, height: SQUARE,
                                         alignItems: "center", justifyContent: "center",
-                                        backgroundColor: isSelected ? "#88c" : (isDark ? "#769656" : "#eeeed2"),
-                                        // personalize: change colors (#769656 = green, #eeeed2 = beige)
+                                        backgroundColor: isSelected
+                                            ? "#88c"
+                                            : isCheckedKing
+                                                ? "#d06666" // 💡 personalize: check color
+                                                : (isDark ? "#769656" : "#eeeed2"),
                                         borderWidth: 0.25, borderColor: "#333",
                                     }}
                                 >
@@ -111,8 +136,14 @@ export default function ChessBoard() {
                     </View>
                 ))}
             </View>
-            <Text style={{ color: "#ccc", marginTop: 12 }}>
-                Turn: {turn === "w" ? "White" : "Black"} {game.isGameOver() ? "— Game Over" : ""}
+            <Text style={{ color: "#ccc", marginTop: 12, textAlign: "center" }}>
+                {isMate
+                    ? (result === "draw"
+                        ? "Checkmate — Draw"
+                        : `Checkmate — ${result === "w" ? "White" : "Black"} wins`)
+                    : isDrawn
+                        ? "Draw"
+                        : `Turn: ${turn === "w" ? "White" : "Black"}${isCheck ? " — Check" : ""}`}
             </Text>
         </View>
     );

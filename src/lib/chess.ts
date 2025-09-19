@@ -7,6 +7,20 @@ class Game {
   fen() { return this.chess.fen(); }
   turn(): "w" | "b" { return this.chess.turn(); }
   isGameOver() { return this.chess.isGameOver(); }
+  isCheck() { return this.chess.isCheck(); }
+  isCheckmate() { return this.chess.isCheckmate(); }
+  isStalemate() { return this.chess.isStalemate(); }
+  isDraw() { return this.chess.isDraw(); }
+
+  winner(): "w" | "b" | "draw" | null {
+    if (!this.isGameOver()) return null;
+    if (this.isCheckmate()) {
+      // Side-to-move is the mated side; opposite color wins
+      return this.turn() === "w" ? "b" : "w";
+    }
+    if (this.isStalemate() || this.isDraw()) return "draw";
+    return null;
+  }
 
   board() {
     // rank 8..1 -> rows 0..7, files a..h -> cols 0..7
@@ -18,17 +32,17 @@ class Game {
   }
 
   moveUci(uci: string): boolean {
-  // "e2e4" or "e7e8q"
-  const from = uci.slice(0, 2) as Square;
-  const to = uci.slice(2, 4) as Square;
-  const promotion = uci.length === 5 ? uci[4] : undefined;
-  try {
-    const res = this.chess.move({ from, to, promotion });
-    return !!res;
-  } catch {
-    return false;
+    // "e2e4" or "e7e8q"
+    const from = uci.slice(0, 2) as Square;
+    const to = uci.slice(2, 4) as Square;
+    const promotion = uci.length === 5 ? uci[4] : undefined;
+    try {
+      const res = this.chess.move({ from, to, promotion });
+      return !!res;
+    } catch {
+      return false;
+    }
   }
-}
 
 }
 
