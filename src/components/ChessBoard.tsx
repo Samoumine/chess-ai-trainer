@@ -1,6 +1,9 @@
+import { Audio } from "expo-av";
 import React, { useState } from "react";
-import { View, Text, Pressable } from "react-native";
-import { game, BoardSquare } from "../../src/lib/chess";
+import { Pressable, Text, View } from "react-native";
+import { BoardSquare, game } from "../../src/lib/chess";
+import GameStatus from "./GameStatus";
+
 
 const SQUARE = 44; // personalize: make 36 for smaller squares or 60 for bigger
 function findKingSquare(color: "w" | "b", board: (BoardSquare | null)[][]): string | null {
@@ -39,50 +42,96 @@ export default function ChessBoard() {
     const [selected, setSelected] = useState<string | null>(null);
     const [targets, setTargets] = useState<Set<string>>(new Set());
     const [turn, setTurn] = useState<"w" | "b">(game.turn());
+
     const b = game.board();
     const isCheck = game.isCheck();
     const isMate = game.isCheckmate();
     const isDrawn = game.isStalemate() || game.isDraw();
     const result = game.winner(); // "w" | "b" | "draw" | null
-    // In chess.js, isCheck() is true for the side-to-move
     const checkedKingSq = isCheck ? findKingSquare(turn, b) : null;
 
+    const [sndMoveSelf] = useState(() => new Audio.Sound());
+    const [sndCapture] = useState(() => new Audio.Sound());
+    const [sndCastle] = useState(() => new Audio.Sound());
+    const [sndCheck] = useState(() => new Audio.Sound());
+    const [sndPromote] = useState(() => new Audio.Sound());
+    const [sndIllegal] = useState(() => new Audio.Sound());
+    const [sndGameEnd] = useState(() => new Audio.Sound());
 
 
     const onSquarePress = (a: string) => {
+        const r = 8 - Number(a[1]);      // row index of target square
+        const c = a.charCodeAt(0) - 97;  // col index of target square
+        const destHadPiece = !!b[r][c];  // true if target square already had a piece
+        const sq = b[r][c];
+        const ok = game.moveUci(selected + a);
+        const moves = game.legalMoves(a as any);
+
         if (!selected) {
-            // first tap: only allow selecting own piece
-            const r = 8 - Number(a[1]);
-            const c = a.charCodeAt(0) - 97;
-            const sq = b[r][c];
             if (sq && sq.color === game.turn()) {
                 setSelected(a);
-                const moves = game.legalMoves(a as any);
                 setTargets(new Set(moves.map(m => m.to)));
             }
             return;
         } else {
-            // if tapping another of your own pieces, switch selection
-            const r = 8 - Number(a[1]);
-            const c = a.charCodeAt(0) - 97;
-            const sq = b[r][c];
             if (sq && sq.color === game.turn()) {
                 setSelected(a);
-                const moves = game.legalMoves(a as any);
                 setTargets(new Set(moves.map(m => m.to)));
                 return;
             }
-
-            // otherwise, attempt a move
-            const ok = game.moveUci(selected + a);
             setSelected(null);
             setTargets(new Set());
             if (ok) {
                 setTick(t => t + 1);
                 setTurn(game.turn()); // keep label in sync
+                (destHadPiece ? sndCapture : sndMoveSelf).replayAsync().catch(() => { });
+            }
+            if (!ok) {
+                sndIllegal.replayAsync().catch(() => { });
+                return;
             }
         }
+        const last = game.lastMove();
+        const flags = last?.flags ?? ""; // 'c' capture, 'k' kingside, 'q' queenside, 'p' promote
+        const played =
+            (flags.includes("k") || flags.includes("q") ? sndCastle :
+                flags.includes("p") ? sndPromote :
+                    flags.includes("c") || destHadPiece ? sndCapture :
+                        game.isCheckmate() || game.isStalemate() || game.isDraw() ? sndGameEnd :
+                            game.isCheck() ? sndCheck :
+                                sndMoveSelf);
+
+        played.replayAsync().catch(() => { });
     };
+
+    React.useEffect(() => {
+        (async () => {
+            try {
+                await Promise.all([
+                    sndMoveSelf.loadAsync(require("../../assets/sounds/move-self.mp3")),
+                    sndCapture.loadAsync(require("../../assets/sounds/capture.mp3")),
+                    sndCastle.loadAsync(require("../../assets/sounds/castle.mp3")),
+                    sndCheck.loadAsync(require("../../assets/sounds/move-check.mp3")),
+                    sndPromote.loadAsync(require("../../assets/sounds/promote.mp3")),
+                    sndIllegal.loadAsync(require("../../assets/sounds/illegal.mp3")),
+                    // If this fails (e.g., webm), just ignore:
+                    sndGameEnd.loadAsync(require("../../assets/sounds/game-end.webm")).catch(() => { }),
+                ]);
+            } catch (e) {
+                console.warn("Sound load error", e);
+            }
+        })();
+        return () => {
+            sndMoveSelf.unloadAsync();
+            sndCapture.unloadAsync();
+            sndCastle.unloadAsync();
+            sndCheck.unloadAsync();
+            sndPromote.unloadAsync();
+            sndIllegal.unloadAsync();
+            sndGameEnd.unloadAsync();
+        };
+    }, []);
+
 
 
     return (
@@ -136,15 +185,7 @@ export default function ChessBoard() {
                     </View>
                 ))}
             </View>
-            <Text style={{ color: "#ccc", marginTop: 12, textAlign: "center" }}>
-                {isMate
-                    ? (result === "draw"
-                        ? "Checkmate — Draw"
-                        : `Checkmate — ${result === "w" ? "White" : "Black"} wins`)
-                    : isDrawn
-                        ? "Draw"
-                        : `Turn: ${turn === "w" ? "White" : "Black"}${isCheck ? " — Check" : ""}`}
-            </Text>
+            <GameStatus turn={turn} />
         </View>
     );
 }

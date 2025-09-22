@@ -1,4 +1,4 @@
-import { Chess, Square, Move } from "chess.js";
+import { Chess, Move, Square } from "chess.js";
 
 class Game {
   private chess = new Chess();
@@ -20,6 +20,11 @@ class Game {
     }
     if (this.isStalemate() || this.isDraw()) return "draw";
     return null;
+  }
+
+  lastMove(): Move | null {
+    const h = this.chess.history({ verbose: true }) as Move[];
+    return h.length ? h[h.length - 1] : null;
   }
 
   board() {
