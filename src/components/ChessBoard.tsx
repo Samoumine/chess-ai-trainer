@@ -1,9 +1,29 @@
 import { Audio } from "expo-av";
 import React, { useState } from "react";
-import { Pressable, Text, View } from "react-native";
-import { BoardSquare, game } from "../../src/lib/chess";
+import { Modal, Pressable, Text, View } from "react-native";
+import { BoardSquare, game } from "../lib/chess";
 import GameStatus from "./GameStatus";
 
+
+type Status = {
+    turn: "w" | "b";
+    isMate: boolean;
+    isDrawn: boolean;
+    isCheck: boolean;
+    winner: "w" | "b" | "draw" | null;
+};
+
+function readStatus(): Status {
+    return {
+        turn: game.turn(),
+        isMate: game.isCheckmate(),
+        isDrawn: game.isStalemate() || game.isDraw(),
+        isCheck: game.isCheck(),
+        winner: (game as any).winner?.() ?? // if you added winner()
+            (game.isCheckmate() ? (game.turn() === "w" ? "b" : "w")
+                : (game.isStalemate() || game.isDraw()) ? "draw" : null),
+    };
+}
 
 const SQUARE = 44; // personalize: make 36 for smaller squares or 60 for bigger
 function findKingSquare(color: "w" | "b", board: (BoardSquare | null)[][]): string | null {
@@ -19,6 +39,8 @@ function findKingSquare(color: "w" | "b", board: (BoardSquare | null)[][]): stri
     }
     return null;
 }
+
+
 
 function algebraic(r: number, c: number) {
     const file = String.fromCharCode("a".charCodeAt(0) + c);
@@ -37,18 +59,29 @@ function PieceGlyph({ sq }: { sq: BoardSquare | null }) {
     return <Text style={{ fontSize: 28, color }}>{glyph}</Text>;
 }
 
+// utils/coords.ts
+export function squareToRC(sq: string) {
+    // files a..h → 0..7 ; ranks 8..1 → 0..7
+    const c = sq.charCodeAt(0) - 97;          // 'a' → 0
+    const r = 8 - parseInt(sq[1], 10);        // '8' → 0, '1' → 7
+    return { r, c };
+}
+
+
 export default function ChessBoard() {
-    const [, setTick] = useState(0);
+    const [status, setStatus] = useState<Status>(readStatus());
     const [selected, setSelected] = useState<string | null>(null);
     const [targets, setTargets] = useState<Set<string>>(new Set());
-    const [turn, setTurn] = useState<"w" | "b">(game.turn());
+
+    type PromoState = { from: string; to: string } | null;
+    const [promo, setPromo] = useState<PromoState>(null);
 
     const b = game.board();
     const isCheck = game.isCheck();
     const isMate = game.isCheckmate();
     const isDrawn = game.isStalemate() || game.isDraw();
     const result = game.winner(); // "w" | "b" | "draw" | null
-    const checkedKingSq = isCheck ? findKingSquare(turn, b) : null;
+    const checkedKingSq = isCheck ? findKingSquare(game.turn(), b) : null;
 
     const [sndMoveSelf] = useState(() => new Audio.Sound());
     const [sndCapture] = useState(() => new Audio.Sound());
@@ -60,49 +93,122 @@ export default function ChessBoard() {
 
 
     const onSquarePress = (a: string) => {
-        const r = 8 - Number(a[1]);      // row index of target square
-        const c = a.charCodeAt(0) - 97;  // col index of target square
-        const destHadPiece = !!b[r][c];  // true if target square already had a piece
-        const sq = b[r][c];
-        const ok = game.moveUci(selected + a);
-        const moves = game.legalMoves(a as any);
+        // Read board BEFORE any move (needed for capture/en passant sound heuristics)
+        const b = game.board();
+        const r = 8 - Number(a[1]);           // row index of target square
+        const c = a.charCodeAt(0) - 97;       // col index of target square
+        const destHadPiece = !!b[r][c];       // did target square already have a piece?
+        const sq = b[r][c] as BoardSquare;    // piece or null at target
 
+        // ── 1) No selection yet: first click = select your own piece ────────────────
         if (!selected) {
             if (sq && sq.color === game.turn()) {
                 setSelected(a);
-                setTargets(new Set(moves.map(m => m.to)));
+                const movesFromA = game.legalMoves(a as any);
+                setTargets(new Set(movesFromA.map(m => m.to)));
+            } else {
+                // optional: play illegal tap sound here
+                sndIllegal.replayAsync().catch(() => { });
             }
+            return; // IMPORTANT: do not attempt any move yet
+        }
+
+        // ── 2) If you click another of your pieces, switch selection ───────────────
+        if (sq && sq.color === game.turn()) {
+            setSelected(a);
+            const movesFromA = game.legalMoves(a as any);
+            setTargets(new Set(movesFromA.map(m => m.to)));
             return;
-        } else {
-            if (sq && sq.color === game.turn()) {
-                setSelected(a);
-                setTargets(new Set(moves.map(m => m.to)));
-                return;
-            }
+        }
+
+        // ── 3) Attempt to move from `selected` to `a` (handle promotion first) ─────
+        const cand = game.legalMoves(selected as any).find(m => m.to === a);
+
+        // Not a legal destination from selected piece → illegal
+        if (!cand) {
+            sndIllegal.replayAsync().catch(() => { });
             setSelected(null);
             setTargets(new Set());
-            if (ok) {
-                setTick(t => t + 1);
-                setTurn(game.turn()); // keep label in sync
-                (destHadPiece ? sndCapture : sndMoveSelf).replayAsync().catch(() => { });
-            }
-            if (!ok) {
-                sndIllegal.replayAsync().catch(() => { });
-                return;
-            }
+            return;
         }
-        const last = game.lastMove();
-        const flags = last?.flags ?? ""; // 'c' capture, 'k' kingside, 'q' queenside, 'p' promote
+
+        // Promotion? open picker; do NOT execute yet
+        if (cand.flags.includes("p")) {
+            setPromo({ from: selected, to: a });
+            // keep selection so picker can call executeMove(from, to, piece)
+            return;
+        }
+
+        // Execute the non-promotion move now
+        const res = game.moveUci(selected + a); // returns Move | null (never throws)
+        if (!res) {
+            sndIllegal.replayAsync().catch(() => { });
+            setSelected(null);
+            setTargets(new Set());
+            return;
+        }
+
+        setStatus(readStatus());
+
+        // ── 4) Sounds based on the executed move’s flags and board state ───────────
+        const flags = res.flags ?? ""; // 'c' capture, 'e' en-passant, 'k'/'q' castle, 'p' promote
         const played =
-            (flags.includes("k") || flags.includes("q") ? sndCastle :
+            (flags.includes("k") || flags.includes("q")) ? sndCastle :
                 flags.includes("p") ? sndPromote :
-                    flags.includes("c") || destHadPiece ? sndCapture :
+                    (flags.includes("c") || flags.includes("e") || destHadPiece) ? sndCapture :
                         game.isCheckmate() || game.isStalemate() || game.isDraw() ? sndGameEnd :
                             game.isCheck() ? sndCheck :
-                                sndMoveSelf);
+                                sndMoveSelf;
 
         played.replayAsync().catch(() => { });
+
+        // ── 5) Clear UI state ──────────────────────────────────────────────────────
+        setSelected(null);
+        setTargets(new Set());
+
     };
+
+    const onReset = () => {
+        game.reset();
+        setStatus(readStatus());   // <- also update on reset
+    };
+
+    const executeMove = (from?: string | null, to?: string | null, promotion?: "q" | "r" | "b" | "n") => {
+        if (!from || !to) return false; // <-- prevent "null" going through
+        // read board BEFORE the move (for capture sound incl. en passant)
+        const b = game.board();
+        const { r, c } = squareToRC(to);
+        const destHadPiece = !!b[r][c];
+
+        const cand = game.legalMoves(from as any).find(m => m.to === to);
+        // If this move is a promotion and we don't yet have the choice, open picker.
+        if (!promotion && cand && cand.flags.includes("p")) {
+            setPromo({ from, to });  // elsewhere you'll call executeMove(from,to,choice)
+            return false;
+        }
+
+        // Build UCI and make the move
+        const uci = from + to + (promotion ?? "");
+        const res = game.moveUci(uci);
+        if (!res) {
+            sndIllegal.replayAsync().catch(() => { });
+            return false;
+        }
+
+        // pick the right sound
+        const flags = res.flags ?? ""; // from chess.js Move we just executed
+        const played =
+            (flags.includes("k") || flags.includes("q")) ? sndCastle :
+                flags.includes("p") ? sndPromote :
+                    (flags.includes("c") || flags.includes("e") || destHadPiece)
+                        ? sndCapture
+                        : game.isCheck()
+                            ? sndCheck
+                            : sndMoveSelf;
+        played.replayAsync().catch(() => { });
+        return true;
+    };
+
 
     React.useEffect(() => {
         (async () => {
@@ -184,8 +290,46 @@ export default function ChessBoard() {
                         })}
                     </View>
                 ))}
+                {promo && (
+                    <Modal transparent animationType="fade" onRequestClose={() => setPromo(null)}>
+                        <View style={{
+                            flex: 1, backgroundColor: "rgba(0,0,0,0.45)",
+                            alignItems: "center", justifyContent: "center"
+                        }}>
+                            <View style={{
+                                backgroundColor: "#222", borderRadius: 16, padding: 14, width: 260
+                            }}>
+                                <Text style={{ color: "#fff", fontWeight: "700", fontSize: 16, marginBottom: 8 }}>
+                                    Promote to
+                                </Text>
+                                <View style={{ flexDirection: "row", justifyContent: "space-between" }}>
+                                    {(["q", "r", "b", "n"] as const).map(p => (
+                                        <Pressable
+                                            key={p}
+                                            onPress={() => {
+                                                if (!promo) return;
+                                                executeMove(promo.from, promo.to, p);
+                                                setPromo(null);
+                                            }}
+                                            style={{
+                                                width: 56, height: 56, borderRadius: 12,
+                                                backgroundColor: "#333", alignItems: "center", justifyContent: "center"
+                                            }}
+                                        >
+                                            <Text style={{ color: "#fff", fontSize: 18, fontWeight: "700" }}>{p.toUpperCase()}</Text>
+                                        </Pressable>
+                                    ))}
+                                </View>
+                                <Pressable onPress={() => setPromo(null)} style={{ marginTop: 10, alignSelf: "center" }}>
+                                    <Text style={{ color: "#bbb" }}>Cancel</Text>
+                                </Pressable>
+                            </View>
+                        </View>
+                    </Modal>
+                )}
+
             </View>
-            <GameStatus turn={turn} />
+            <GameStatus status={status} />
         </View>
     );
 }
