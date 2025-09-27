@@ -1,71 +1,10 @@
 import { Audio } from "expo-av";
 import React, { useState } from "react";
-import { Modal, Pressable, Text, View } from "react-native";
+import { Pressable, Text, View } from "react-native";
 import { BoardSquare, game } from "../lib/chess";
 import GameStatus from "./GameStatus";
+import PromotionPicker from "./PromotionPicker";
 
-
-type Status = {
-    turn: "w" | "b";
-    isMate: boolean;
-    isDrawn: boolean;
-    isCheck: boolean;
-    winner: "w" | "b" | "draw" | null;
-};
-
-function readStatus(): Status {
-    return {
-        turn: game.turn(),
-        isMate: game.isCheckmate(),
-        isDrawn: game.isStalemate() || game.isDraw(),
-        isCheck: game.isCheck(),
-        winner: (game as any).winner?.() ?? // if you added winner()
-            (game.isCheckmate() ? (game.turn() === "w" ? "b" : "w")
-                : (game.isStalemate() || game.isDraw()) ? "draw" : null),
-    };
-}
-
-const SQUARE = 44; // personalize: make 36 for smaller squares or 60 for bigger
-function findKingSquare(color: "w" | "b", board: (BoardSquare | null)[][]): string | null {
-    for (let r = 0; r < 8; r++) {
-        for (let c = 0; c < 8; c++) {
-            const sq = board[r][c];
-            if (sq && sq.type === "k" && sq.color === color) {
-                const file = String.fromCharCode(97 + c);
-                const rank = String(8 - r);
-                return file + rank;
-            }
-        }
-    }
-    return null;
-}
-
-
-
-function algebraic(r: number, c: number) {
-    const file = String.fromCharCode("a".charCodeAt(0) + c);
-    const rank = (8 - r).toString();
-    return (file + rank);
-}
-
-function PieceGlyph({ sq }: { sq: BoardSquare | null }) {
-    if (!sq) return null;
-    const map: Record<string, string> = {
-        p: "♟", r: "♜", n: "♞", b: "♝", q: "♛", k: "♚",
-    };
-    const glyph = map[sq.type] ?? "?";
-    const color = sq.color === "w" ? "#fff" : "#111";
-    // personalize: pick colors (e.g., "#e6e6e6" for white, "#333" for black)
-    return <Text style={{ fontSize: 28, color }}>{glyph}</Text>;
-}
-
-// utils/coords.ts
-export function squareToRC(sq: string) {
-    // files a..h → 0..7 ; ranks 8..1 → 0..7
-    const c = sq.charCodeAt(0) - 97;          // 'a' → 0
-    const r = 8 - parseInt(sq[1], 10);        // '8' → 0, '1' → 7
-    return { r, c };
-}
 
 
 export default function ChessBoard() {
@@ -73,7 +12,7 @@ export default function ChessBoard() {
     const [selected, setSelected] = useState<string | null>(null);
     const [targets, setTargets] = useState<Set<string>>(new Set());
 
-    type PromoState = { from: string; to: string } | null;
+    type PromoState = { from: string; to: string; color: "w" | "b" } | null;
     const [promo, setPromo] = useState<PromoState>(null);
 
     const b = game.board();
@@ -99,6 +38,8 @@ export default function ChessBoard() {
         const c = a.charCodeAt(0) - 97;       // col index of target square
         const destHadPiece = !!b[r][c];       // did target square already have a piece?
         const sq = b[r][c] as BoardSquare;    // piece or null at target
+        const color: "w" | "b" = sq?.color === "b" ? "b" : "w";
+
 
         // ── 1) No selection yet: first click = select your own piece ────────────────
         if (!selected) {
@@ -134,9 +75,19 @@ export default function ChessBoard() {
 
         // Promotion? open picker; do NOT execute yet
         if (cand.flags.includes("p")) {
-            setPromo({ from: selected, to: a });
+            setPromo({ from: selected, to: a, color });
             // keep selection so picker can call executeMove(from, to, piece)
             return;
+        }
+
+        // Promotion? open picker showing the side to move's set
+        if (cand.flags.includes("p")) {
+            // read color from the FROM square before the move
+            const { r: rf, c: cf } = squareToRC(selected);
+            const fromPiece = b[rf][cf];
+            const color: "w" | "b" = fromPiece && fromPiece.color === "b" ? "b" : "w";
+            setPromo({ from: selected, to: a, color });
+            return; // stop here; picker will finish the move
         }
 
         // Execute the non-promotion move now
@@ -165,25 +116,63 @@ export default function ChessBoard() {
         // ── 5) Clear UI state ──────────────────────────────────────────────────────
         setSelected(null);
         setTargets(new Set());
-
+        setStatus(readStatus());
     };
+
+    const onPickPromotion = (piece: "q" | "r" | "b" | "n") => {
+        if (!promo) return;
+
+        const b = game.board();
+        const { r: tr, c: tc } = squareToRC(promo.to);
+        const destHadPiece = !!b[tr][tc];
+
+        const uci = promo.from + promo.to + piece;
+        const res = game.moveUci(uci);
+        setPromo(null);
+        if (!res) {
+            sndIllegal.replayAsync().catch(() => { });
+            setSelected(null);
+            setTargets(new Set());
+            return;
+        }
+
+        const flags = res.flags ?? ""; // 'p' promote, 'c' capture, 'e' en-passant, 'k'/'q' castle
+        const played =
+            (flags.includes("k") || flags.includes("q")) ? sndCastle :
+                flags.includes("p") ? sndPromote :                                // <-- promotion wins
+                    (flags.includes("c") || flags.includes("e") || destHadPiece) ? sndCapture :
+                        game.isCheckmate() || game.isStalemate() || game.isDraw() ? sndGameEnd :
+                            game.isCheck() ? sndCheck :
+                                sndMoveSelf;
+
+        played.replayAsync().catch(() => { });
+
+        setSelected(null);
+        setTargets(new Set());
+        setStatus(readStatus()); // if you're using the status-props approach
+    };
+
+    const onCancelPromotion = () => setPromo(null);
+
 
     const onReset = () => {
         game.reset();
-        setStatus(readStatus());   // <- also update on reset
+        setStatus(readStatus());
     };
 
     const executeMove = (from?: string | null, to?: string | null, promotion?: "q" | "r" | "b" | "n") => {
-        if (!from || !to) return false; // <-- prevent "null" going through
-        // read board BEFORE the move (for capture sound incl. en passant)
+        if (!from || !to) return false;
         const b = game.board();
-        const { r, c } = squareToRC(to);
-        const destHadPiece = !!b[r][c];
+        const { r: tr, c: tc } = squareToRC(to);
+        const destHadPiece = !!b[tr][tc];
 
+
+        const { r: fr, c: fc } = squareToRC(from!);
+        const fromPiece = b[fr][fc];
+        const color: "w" | "b" = fromPiece?.color === "b" ? "b" : "w";
         const cand = game.legalMoves(from as any).find(m => m.to === to);
-        // If this move is a promotion and we don't yet have the choice, open picker.
         if (!promotion && cand && cand.flags.includes("p")) {
-            setPromo({ from, to });  // elsewhere you'll call executeMove(from,to,choice)
+            setPromo({ from, to, color });
             return false;
         }
 
@@ -290,46 +279,83 @@ export default function ChessBoard() {
                         })}
                     </View>
                 ))}
-                {promo && (
-                    <Modal transparent animationType="fade" onRequestClose={() => setPromo(null)}>
-                        <View style={{
-                            flex: 1, backgroundColor: "rgba(0,0,0,0.45)",
-                            alignItems: "center", justifyContent: "center"
-                        }}>
-                            <View style={{
-                                backgroundColor: "#222", borderRadius: 16, padding: 14, width: 260
-                            }}>
-                                <Text style={{ color: "#fff", fontWeight: "700", fontSize: 16, marginBottom: 8 }}>
-                                    Promote to
-                                </Text>
-                                <View style={{ flexDirection: "row", justifyContent: "space-between" }}>
-                                    {(["q", "r", "b", "n"] as const).map(p => (
-                                        <Pressable
-                                            key={p}
-                                            onPress={() => {
-                                                if (!promo) return;
-                                                executeMove(promo.from, promo.to, p);
-                                                setPromo(null);
-                                            }}
-                                            style={{
-                                                width: 56, height: 56, borderRadius: 12,
-                                                backgroundColor: "#333", alignItems: "center", justifyContent: "center"
-                                            }}
-                                        >
-                                            <Text style={{ color: "#fff", fontSize: 18, fontWeight: "700" }}>{p.toUpperCase()}</Text>
-                                        </Pressable>
-                                    ))}
-                                </View>
-                                <Pressable onPress={() => setPromo(null)} style={{ marginTop: 10, alignSelf: "center" }}>
-                                    <Text style={{ color: "#bbb" }}>Cancel</Text>
-                                </Pressable>
-                            </View>
-                        </View>
-                    </Modal>
-                )}
 
             </View>
+            <PromotionPicker
+                visible={!!promo}
+                color={promo?.color ?? "w"}
+                onPick={onPickPromotion}
+                onCancel={onCancelPromotion}
+            />
             <GameStatus status={status} />
         </View>
     );
 }
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+type Status = {
+    turn: "w" | "b";
+    isMate: boolean;
+    isDrawn: boolean;
+    isCheck: boolean;
+    winner: "w" | "b" | "draw" | null;
+};
+
+function readStatus(): Status {
+    return {
+        turn: game.turn(),
+        isMate: game.isCheckmate(),
+        isDrawn: game.isStalemate() || game.isDraw(),
+        isCheck: game.isCheck(),
+        winner: (game as any).winner?.() ?? // if you added winner()
+            (game.isCheckmate() ? (game.turn() === "w" ? "b" : "w")
+                : (game.isStalemate() || game.isDraw()) ? "draw" : null),
+    };
+}
+
+
+// ── Utils ──────────────────────────────────────────────────────────────────────
+
+const SQUARE = 44; // personalize: make 36 for smaller squares or 60 for bigger
+function findKingSquare(color: "w" | "b", board: (BoardSquare | null)[][]): string | null {
+    for (let r = 0; r < 8; r++) {
+        for (let c = 0; c < 8; c++) {
+            const sq = board[r][c];
+            if (sq && sq.type === "k" && sq.color === color) {
+                const file = String.fromCharCode(97 + c);
+                const rank = String(8 - r);
+                return file + rank;
+            }
+        }
+    }
+    return null;
+}
+
+
+
+function algebraic(r: number, c: number) {
+    const file = String.fromCharCode("a".charCodeAt(0) + c);
+    const rank = (8 - r).toString();
+    return (file + rank);
+}
+
+function PieceGlyph({ sq }: { sq: BoardSquare | null }) {
+    if (!sq) return null;
+    const map: Record<string, string> = {
+        p: "♟", r: "♜", n: "♞", b: "♝", q: "♛", k: "♚",
+    };
+    const glyph = map[sq.type] ?? "?";
+    const color = sq.color === "w" ? "#fff" : "#111";
+    // personalize: pick colors (e.g., "#e6e6e6" for white, "#333" for black)
+    return <Text style={{ fontSize: 28, color }}>{glyph}</Text>;
+}
+
+
+export function squareToRC(sq: string) {
+    // files a..h → 0..7 ; ranks 8..1 → 0..7
+    const c = sq.charCodeAt(0) - 97;          // 'a' → 0
+    const r = 8 - parseInt(sq[1], 10);        // '8' → 0, '1' → 7
+    return { r, c };
+}
+
+
