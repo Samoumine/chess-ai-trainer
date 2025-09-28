@@ -40,40 +40,35 @@ export default function ChessBoard() {
 
 
     const onSquarePress = (a: string) => {
-        // Read board BEFORE any move (needed for capture/en passant sound heuristics)
         const b = game.board();
-        const r = 8 - Number(a[1]);           // row index of target square
-        const c = a.charCodeAt(0) - 97;       // col index of target square
-        const destHadPiece = !!b[r][c];       // did target square already have a piece?
-        const sq = b[r][c] as BoardSquare;    // piece or null at target
-        const color: "w" | "b" = sq?.color === "b" ? "b" : "w";
+        const r = 8 - Number(a[1]);
+        const c = a.charCodeAt(0) - 97;
+        const sq = b[r][c] as BoardSquare | null;
 
-
-        // ── 1) No selection yet: first click = select your own piece ────────────────
+        // 1) No selection yet — select your own piece
         if (!selected) {
             if (sq && sq.color === game.turn()) {
                 setSelected(a);
-                const movesFromA = game.legalMoves(a as any);
-                setTargets(new Set(movesFromA.map(m => m.to)));
+                const moves = game.legalMoves(a as any);
+                setTargets(new Set(moves.map(m => m.to)));
             } else {
-                // optional: play illegal tap sound here
                 sndIllegal.replayAsync().catch(() => { });
             }
-            return; // IMPORTANT: do not attempt any move yet
-        }
-
-        // ── 2) If you click another of your pieces, switch selection ───────────────
-        if (sq && sq.color === game.turn()) {
-            setSelected(a);
-            const movesFromA = game.legalMoves(a as any);
-            setTargets(new Set(movesFromA.map(m => m.to)));
             return;
         }
 
-        // ── 3) Attempt to move from `selected` to `a` (handle promotion first) ─────
+        // 2) If you tap another of your own pieces — switch selection
+        if (sq && sq.color === game.turn()) {
+            setSelected(a);
+            const moves = game.legalMoves(a as any);
+            setTargets(new Set(moves.map(m => m.to)));
+            return;
+        }
+
+        // 3) Attempt the move from `selected` to `a`
         const cand = game.legalMoves(selected as any).find(m => m.to === a);
 
-        // Not a legal destination from selected piece → illegal
+        // illegal destination from the selected square
         if (!cand) {
             sndIllegal.replayAsync().catch(() => { });
             setSelected(null);
@@ -81,51 +76,20 @@ export default function ChessBoard() {
             return;
         }
 
-        // Promotion? open picker; do NOT execute yet
+        // Promotion? open picker; DO NOT move yet
         if (cand.flags.includes("p")) {
-            setPromo({ from: selected, to: a, color });
-            // keep selection so picker can call executeMove(from, to, piece)
-            return;
-        }
-
-        // Promotion? open picker showing the side to move's set
-        if (cand.flags.includes("p")) {
-            // read color from the FROM square before the move
+            // color from the FROM square (not target)
             const { r: rf, c: cf } = squareToRC(selected);
             const fromPiece = b[rf][cf];
-            const color: "w" | "b" = fromPiece && fromPiece.color === "b" ? "b" : "w";
+            const color: "w" | "b" = fromPiece?.color === "b" ? "b" : "w";
             setPromo({ from: selected, to: a, color });
-            return; // stop here; picker will finish the move
-        }
-
-        // Execute the non-promotion move now
-        const res = game.moveUci(selected + a); // returns Move | null (never throws)
-        if (!res) {
-            sndIllegal.replayAsync().catch(() => { });
-            setSelected(null);
-            setTargets(new Set());
             return;
         }
 
-        setStatus(readStatus());
-
-        // ── 4) Sounds based on the executed move’s flags and board state ───────────
-        const flags = res.flags ?? ""; // 'c' capture, 'e' en-passant, 'k'/'q' castle, 'p' promote
-        const played =
-            (flags.includes("k") || flags.includes("q")) ? sndCastle :
-                flags.includes("p") ? sndPromote :
-                    (flags.includes("c") || flags.includes("e") || destHadPiece) ? sndCapture :
-                        game.isCheckmate() || game.isStalemate() || game.isDraw() ? sndGameEnd :
-                            game.isCheck() ? sndCheck :
-                                sndMoveSelf;
-
-        played.replayAsync().catch(() => { });
-
-        // ── 5) Clear UI state ──────────────────────────────────────────────────────
-        setSelected(null);
-        setTargets(new Set());
-        setStatus(readStatus());
+        // 4) Non-promotion move — let executeMove do everything (sounds/status/engine)
+        executeMove(selected, a);
     };
+
 
     const onPickPromotion = (piece: "q" | "r" | "b" | "n") => {
         if (!promo) return;
@@ -191,6 +155,10 @@ export default function ChessBoard() {
             sndIllegal.replayAsync().catch(() => { });
             return false;
         }
+
+        setSelected(null);
+        setTargets(new Set());
+        setStatus(readStatus());
 
         // pick the right sound
         const flags = res.flags ?? ""; // from chess.js Move we just executed
