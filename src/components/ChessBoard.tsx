@@ -2,15 +2,23 @@ import { Audio } from "expo-av";
 import React, { useState } from "react";
 import { Pressable, Text, View } from "react-native";
 import { BoardSquare, game } from "../lib/chess";
+import { MinimaxEngine } from "../services/MinimaxEngine";
 import GameStatus from "./GameStatus";
 import PromotionPicker from "./PromotionPicker";
 
 
-
 export default function ChessBoard() {
+    // ── State ─────────────────────────────────────────────────────────────────────
     const [status, setStatus] = useState<Status>(readStatus());
     const [selected, setSelected] = useState<string | null>(null);
     const [targets, setTargets] = useState<Set<string>>(new Set());
+
+    const engineRef = React.useRef<MinimaxEngine | null>(null);
+    const engineReadyRef = React.useRef(false);
+    const [engineOn, setEngineOn] = React.useState(false);
+    const [engineSide, setEngineSide] = React.useState<"w" | "b">("b");
+    // optional UI-only mirror of readiness:
+    const [engineReady, setEngineReady] = React.useState(false);
 
     type PromoState = { from: string; to: string; color: "w" | "b" } | null;
     const [promo, setPromo] = useState<PromoState>(null);
@@ -195,12 +203,15 @@ export default function ChessBoard() {
                             ? sndCheck
                             : sndMoveSelf;
         played.replayAsync().catch(() => { });
+        console.log("[MOVE] executed", { from, to, promotion, nextTurn: game.turn() });
+        requestEngineMove();
         return true;
     };
 
-
+    // ── Load sounds ───────────────────────────────────────────────────────────────
     React.useEffect(() => {
         (async () => {
+
             try {
                 await Promise.all([
                     sndMoveSelf.loadAsync(require("../../assets/sounds/move-self.mp3")),
@@ -210,7 +221,7 @@ export default function ChessBoard() {
                     sndPromote.loadAsync(require("../../assets/sounds/promote.mp3")),
                     sndIllegal.loadAsync(require("../../assets/sounds/illegal.mp3")),
                     // If this fails (e.g., webm), just ignore:
-                    sndGameEnd.loadAsync(require("../../assets/sounds/game-end.webm")).catch(() => { }),
+                    sndGameEnd.loadAsync(require("../../assets/sounds/game-end.mp3")).catch(() => { }),
                 ]);
             } catch (e) {
                 console.warn("Sound load error", e);
@@ -227,9 +238,135 @@ export default function ChessBoard() {
         };
     }, []);
 
+    // ── Engine integration ───────────────────────────────────────────────────────
+    const requestEngineMove = React.useCallback(() => {
+        const eng = engineRef.current;
+        const ready = engineReadyRef.current;
+        console.log("[REQ] called", { engineOn, ready, turn: game.turn(), engineSide });
 
+        if (!engineOn || !eng || !ready) { console.log("[REQ] abort: engine off/not ready"); return; }
+        if (game.isGameOver()) { console.log("[REQ] abort: game over"); return; }
+        if (game.turn() !== engineSide) { console.log("[REQ] abort: not engine turn"); return; }
+
+        const fen = game.fen();
+        console.log("[REQ] sending", { fen });
+        eng.send("position fen " + fen);
+        console.log("[REQ] go movetime 800");
+        eng.send("go movetime 800");
+    }, [engineOn, engineSide]);
+
+    const startEngine = React.useCallback(async () => {
+        if (engineRef.current) return; // already running
+        console.log("[ENG] starting...");
+        const eng = new MinimaxEngine();
+        engineRef.current = eng;
+        engineReadyRef.current = false;
+        setEngineReady(false);
+
+        await eng.start();
+        eng.onMessage(line => {
+            console.log("[ENG]", line);
+            if (typeof line === "string" && line.startsWith("bestmove")) {
+                const uci = line.split(/\s+/)[1];
+                console.log("[ENG] bestmove", uci);
+                if (!uci || uci === "(none)") return;
+                if (game.isGameOver()) { console.log("[ENG] abort: game over"); return; }
+                if (game.turn() !== engineSide) { console.log("[ENG] abort: not engine turn"); return; }
+                const ok = executeMove(uci.slice(0, 2), uci.slice(2, 4), uci[4] as any);
+                console.log("[ENG] applied", { ok, uci });
+            }
+        });
+
+        // Handshake
+        eng.send("uci");
+        eng.send("isready");
+        eng.send("ucinewgame");
+
+        // Mark ready
+        engineReadyRef.current = true;
+        setEngineReady(true);
+
+        // If it's already engine's turn, kick once
+        if (!game.isGameOver() && game.turn() === engineSide) {
+            setTimeout(() => {
+                console.log("[KICK] engine to move now (ready)");
+                requestEngineMove();
+            }, 0);
+        }
+    }, [engineSide, requestEngineMove]);
+
+    const stopEngine = React.useCallback(() => {
+        console.log("[ENG] stopping...");
+        try { engineRef.current?.stop(); } catch { }
+        engineRef.current = null;
+        engineReadyRef.current = false;
+        setEngineReady(false);
+    }, []);
+
+
+    React.useEffect(() => {
+        if (engineOn && engineSide === "w" && !game.isGameOver() && game.turn() === "w") {
+            requestEngineMove();
+        }
+        // run when engine toggled or side changes
+    }, [engineOn, engineSide, requestEngineMove]);
+
+    React.useEffect(() => {
+        if (engineOn && !game.isGameOver() && game.turn() === engineSide) {
+            console.log("[KICK] engine to move now");
+            requestEngineMove();
+        }
+    }, [engineOn, engineSide, requestEngineMove]);
+
+
+    React.useEffect(() => {
+
+        if (!engineOn) {
+            engineRef.current?.stop();
+            engineRef.current = null;
+            setEngineReady(false);
+            return;
+        }
+        const eng = new MinimaxEngine();
+        engineRef.current = eng;
+        (async () => {
+            await eng.start();
+            eng.onMessage(line => {
+                console.log("[ENG]", line);
+                // Parse bestmove
+                if (typeof line === "string" && line.startsWith("bestmove")) {
+                    const uci = line.split(/\s+/)[1];
+                    console.log("[ENG] bestmove", uci);
+                    if (!uci || uci === "(none)") return;
+                    if (game.isGameOver()) { console.log("[ENG] abort: game over"); return; }
+                    if (game.turn() !== engineSide) { console.log("[ENG] abort: not engine turn"); return; }
+                    const from = uci.slice(0, 2);
+                    const to = uci.slice(2, 4);
+                    const promotion = uci[4] as "q" | "r" | "b" | "n" | undefined;
+                    const ok = executeMove(from, to, promotion);
+                    console.log("[ENG] applied", { ok, from, to, promotion });
+                }
+            });
+            // UCI handshake (lightweight for our engine)
+            eng.send("uci");
+            eng.send("isready");
+            eng.send("ucinewgame");
+            setEngineReady(true);
+            // If it's already the engine's turn (e.g., engine plays White), kick once
+            if (!game.isGameOver() && game.turn() === engineSide) {
+                console.log("[KICK] engine to move now (ready)");
+                requestEngineMove(); // will pass the ready check below
+            }
+        })();
+        return () => {
+            engineRef.current?.stop();
+            engineRef.current = null;
+            setEngineReady(false);
+        };
+    }, [engineOn, engineSide]);
 
     return (
+
         <View style={{ alignItems: "center", justifyContent: "center", paddingTop: 20 }}>
             <View style={{ width: SQUARE * 8, height: SQUARE * 8, borderWidth: 2, borderColor: "#333" }}>
                 {b.map((rank, r) => (
@@ -288,6 +425,53 @@ export default function ChessBoard() {
                 onCancel={onCancelPromotion}
             />
             <GameStatus status={status} />
+            <View style={{ marginTop: 8, flexDirection: "row", gap: 8, justifyContent: "center" }}>
+                <Pressable
+                    onPress={async () => {
+                        if (engineOn) {
+                            setEngineOn(false);
+                            stopEngine();
+                        } else {
+                            setEngineOn(true);
+                            await startEngine();
+                        }
+                    }}
+                    style={{ backgroundColor: engineOn ? "#265d2a" : "#444", paddingHorizontal: 12, paddingVertical: 8, borderRadius: 10 }}
+                >
+                    <Text style={{ color: "#fff", fontWeight: "600" }}>
+                        {engineOn ? "Engine: ON" : "Engine: OFF"}
+                    </Text>
+                </Pressable>
+
+                <Pressable
+                    onPress={() => {
+                        setEngineSide(s => {
+                            const next = s === "w" ? "b" : "w";
+                            // If engine is ON and it becomes engine's turn after switching, kick
+                            setTimeout(() => {
+                                if (engineOn && !game.isGameOver() && game.turn() === next) {
+                                    console.log("[KICK] side switched; engine to move now");
+                                    requestEngineMove();
+                                }
+                            }, 0);
+                            return next;
+                        });
+                    }}
+                    disabled={engineOn} // you can allow switching live if you prefer
+                    style={{ backgroundColor: "#333", paddingHorizontal: 12, paddingVertical: 8, borderRadius: 10, opacity: engineOn ? 0.5 : 1 }}
+                >
+                    <Text style={{ color: "#fff" }}>
+                        Engine plays: {engineSide === "w" ? "White" : "Black"}
+                    </Text>
+                </Pressable>
+
+                <Pressable
+                    onPress={() => requestEngineMove()}
+                    style={{ backgroundColor: "#555", paddingHorizontal: 12, paddingVertical: 8, borderRadius: 10 }}
+                >
+                    <Text style={{ color: "#fff" }}>Think now</Text>
+                </Pressable>
+            </View>
         </View>
     );
 }

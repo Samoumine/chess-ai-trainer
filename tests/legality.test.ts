@@ -20,3 +20,5 @@ test("e2e4 e7e5 g1f3 is legal", () => {
   expect(game.moveUci("e7e5")).toBe(true);
   expect(game.moveUci("g1f3")).toBe(true);
 });
+
+
