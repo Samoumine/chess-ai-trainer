@@ -2,8 +2,10 @@ import { Audio } from "expo-av";
 import React, { useState } from "react";
 import { Pressable, Text, View } from "react-native";
 import { BoardSquare, game } from "../lib/chess";
+import { engine } from "../services/engine-singleton";
 import { MinimaxEngine } from "../services/MinimaxEngine";
 import GameStatus from "./GameStatus";
+import LevelSwitch from "./LevelSwitch";
 import PromotionPicker from "./PromotionPicker";
 
 
@@ -38,6 +40,9 @@ export default function ChessBoard() {
     const [sndIllegal] = useState(() => new Audio.Sound());
     const [sndGameEnd] = useState(() => new Audio.Sound());
 
+
+    type Level = "beginner" | "intermediate" | "hard";
+    const [level, setLevel] = React.useState<Level>("beginner");
 
     const onSquarePress = (a: string) => {
         const b = game.board();
@@ -87,7 +92,8 @@ export default function ChessBoard() {
         }
 
         // 4) Non-promotion move — let executeMove do everything (sounds/status/engine)
-        executeMove(selected, a);
+        const ok = executeMove(selected, a);
+        if (ok) requestEngineMove();
     };
 
 
@@ -122,6 +128,7 @@ export default function ChessBoard() {
         setSelected(null);
         setTargets(new Set());
         setStatus(readStatus()); // if you're using the status-props approach
+        requestEngineMove();
     };
 
     const onCancelPromotion = () => setPromo(null);
@@ -175,6 +182,19 @@ export default function ChessBoard() {
         requestEngineMove();
         return true;
     };
+
+
+    const skillFor = (lv: Level) => (lv === "beginner" ? 0 : lv === "intermediate" ? 10 : 20);
+    const applyLevel = (lv: Level) => {
+        const eng = engineRef.current;
+        if (!eng) return;
+        const n = skillFor(lv);
+        eng.send(`setoption name Skill Level value ${n}`);
+        console.log(`[ui] level=${lv} -> skill=${n}`);
+    };
+
+    // whenever the level state changes, push it to engine
+    React.useEffect(() => { applyLevel(level); }, [level]);
 
     // ── Load sounds ───────────────────────────────────────────────────────────────
     React.useEffect(() => {
@@ -333,6 +353,22 @@ export default function ChessBoard() {
         };
     }, [engineOn, engineSide]);
 
+    React.useEffect(() => {
+        const off = engine.onMessage((line) => {
+            if (!line.startsWith("bestmove ")) return;
+            const uci = line.slice(9).trim();          // e.g., "g8f6"
+            if (!uci || uci === "(none)" || game.isGameOver()) return;
+
+            const ok = game.moveUci(uci);
+            if (ok) {
+                // any sounds you want for engine moves can go here (optional)
+                setStatus(readStatus());                 // <- this is your re-render trigger
+            }
+        });
+        return () => off?.();
+    }, []);
+
+
     return (
 
         <View style={{ alignItems: "center", justifyContent: "center", paddingTop: 20 }}>
@@ -439,6 +475,10 @@ export default function ChessBoard() {
                 >
                     <Text style={{ color: "#fff" }}>Think now</Text>
                 </Pressable>
+            </View>
+            {/* Level switch row */}
+            <View style={{ padding: 12 }}>
+                <LevelSwitch value={level} onChange={setLevel} />
             </View>
         </View>
     );

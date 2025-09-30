@@ -2,7 +2,6 @@ import React from "react";
 import { StatusBar, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import ChessBoard from "../../src/components/ChessBoard";
-import EngineDebug from "../../src/components/EngineDebug";
 
 export default function Home() {
   return (
@@ -10,7 +9,6 @@ export default function Home() {
       <StatusBar barStyle="light-content" />
       <View style={{ flex: 1 }}>
         <ChessBoard />
-        <EngineDebug />
       </View>
     </SafeAreaView>
   );

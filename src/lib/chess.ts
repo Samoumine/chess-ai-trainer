@@ -40,6 +40,11 @@ class Game {
     return this.chess.moves({ square: from, verbose: true }) as Move[];
   }
 
+  historyUci(): string[] {
+    const hist = this.chess.history({ verbose: true }) as Array<{ from: string; to: string; promotion?: string }>;
+    return hist.map(m => m.from + m.to + (m.promotion ?? ""));
+  }
+
   moveUci(uci: string, autoQueen = false): Move | null {
     // basic UCI validation: e2e4 or e7e8q
     if (!/^[a-h][1-8][a-h][1-8]([qrbn])?$/.test(uci)) return null;
