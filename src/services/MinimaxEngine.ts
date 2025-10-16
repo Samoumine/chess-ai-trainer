@@ -18,6 +18,21 @@ export class MinimaxEngine implements IEngine {
   private skill = 5;           // 0..20
   private defaultMs = 800;     // fallback movetime
 
+  // Large bounds for mate scoring
+  private static readonly MATE = 1_000_000;
+  private static readonly NEAR_MATE = 999_000; // keep space for ply offsets
+
+  private terminalScore(plyFromRoot: number): number {
+    if (this.chess.isCheckmate()) {
+      return -(MinimaxEngine.MATE - plyFromRoot);
+    }
+    if (this.chess.isDraw() || this.chess.isStalemate() || this.chess.isInsufficientMaterial() || this.chess.isThreefoldRepetition()) {
+      return 0;
+    }
+    return NaN; // "not terminal", caller will do normal eval
+  }
+
+
   async start(): Promise<void> {
     // nothing to init
   }
@@ -135,6 +150,16 @@ export class MinimaxEngine implements IEngine {
     }
   }
 
+  private mvvLvaScore(m: Move): number {
+    // Higher = try earlier. Non-captures get 0.
+    // Use base piece values (same scale as evaluate).
+    const victim = m.captured ? this.pieceVal(m.captured) : 0;
+    const attacker = this.pieceVal(m.piece);
+    // Most Valuable Victim, Least Valuable Attacker: prioritize big gains
+    return victim * 1000 - attacker; // big separation by victim type
+  }
+
+
   // simple piece-square bonuses for development; white perspective; black mirrored
   private pst: Record<string, number[]> = {
     p: [
@@ -210,13 +235,14 @@ export class MinimaxEngine implements IEngine {
 
   private nodes = 0;
 
-  private negamax(depth: number, alpha: number, beta: number): { score: number; move?: Move } {
+  private negamax(depth: number, alpha: number, beta: number, plyFromRoot: number): { score: number; move?: Move } {
     if (this.stopFlag) return { score: 0 };
     this.nodes++;
 
     if (depth === 0 || this.chess.isGameOver()) {
+      const t = this.terminalScore(plyFromRoot);
+      if (!Number.isNaN(t)) return { score: t };
       const s = this.evaluate();
-      // Negamax convention: score is from side-to-move perspective
       return { score: this.chess.turn() === "w" ? s : -s };
     }
 
@@ -225,11 +251,17 @@ export class MinimaxEngine implements IEngine {
 
     // Simple move ordering: captures first
     const moves = this.chess.moves({ verbose: true }) as Move[];
-    moves.sort((m) => (m.flags.includes("c") ? -1 : 1));
+    moves.sort((a, b) => {
+      const ac = a.flags.includes("c"), bc = b.flags.includes("c");
+      if (ac && bc) return this.mvvLvaScore(b) - this.mvvLvaScore(a);
+      if (ac) return -1;
+      if (bc) return 1;
+      return 0;
+    });
 
     for (const m of moves) {
       this.chess.move(m);
-      const { score } = this.negamax(depth - 1, -beta, -a);
+      const { score } = this.negamax(depth - 1, -beta, -a, plyFromRoot + 1);
       this.chess.undo();
       const val = -score;
       if (val > a) {
@@ -253,8 +285,7 @@ export class MinimaxEngine implements IEngine {
     for (let d = 1; d <= maxDepth; d++) {
       if (this.stopFlag) break;
       this.nodes = 0;
-      const { score, move } = this.negamax(d, -10_000_000, 10_000_000);
-      if (this.stopFlag) break;
+      const { score, move } = this.negamax(d, -10_000_000, 10_000_000, 0); if (this.stopFlag) break;
       if (move) { best = move; lastScore = score; }
       if (performance.now() > endAt) break;
     }
