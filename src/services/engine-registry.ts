@@ -2,7 +2,7 @@ import type {
     Engine, EngineKind, EngineOptions, PositionInfo, Recommendation
 } from "../engine/types";
 
-import { NullEngine } from "../engine/null-engine"; // safe placeholder
+import { NullEngine } from "../engine/null-engine";
 
 class EngineRegistry {
   private current: Engine | null = null;

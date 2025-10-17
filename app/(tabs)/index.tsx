@@ -2,6 +2,7 @@ import React from "react";
 import { StatusBar, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import ChessBoard from "../../src/components/ChessBoard";
+import "../../src/services/engine-registry";
 
 export default function Home() {
   return (
