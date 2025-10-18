@@ -13,10 +13,10 @@ type GoResult = {
 
 export class StockfishService {
   private worker: Worker | null = null;
-  private pendingResolvers: Array<(line: string) => void> = [];
+  private listeners: Array<(line: string) => boolean> = [];
   private lastInfo: Partial<GoResult> = {};
 
-  constructor(private workerUrl: string = "/engines/stockfish/stockfish.wasm.js") {}
+  constructor(private workerUrl: string = "/engines/stockfish/stockfish.wasm.js") { }
 
   async init(): Promise<void> {
     if (this.worker) return;
@@ -36,7 +36,7 @@ export class StockfishService {
   async dispose(): Promise<void> {
     this.worker?.terminate();
     this.worker = null;
-    this.pendingResolvers = [];
+    this.listeners = [];
     this.lastInfo = {};
   }
 
@@ -71,46 +71,57 @@ export class StockfishService {
     this.worker.postMessage(cmd);
   }
 
-  private onMsg(line: string) {
-    if (line.startsWith("info ")) {
-      this.parseInfo(line);
+  private onMsg(raw: string) {
+    // Stockfish can send multiple lines per message. Split and process each.
+    const lines = String(raw).split(/\r?\n/).filter(l => l.trim().length > 0);
+    for (const line of lines) {
+      // Parse "info" lines to capture depth/score/nodes/pv
+      if (line.startsWith("info ")) {
+        this.parseInfo(line);
+      }
+      // Notify listeners; keep the ones that are still waiting
+      if (this.listeners.length) {
+        const next: Array<(l: string) => boolean> = [];
+        for (const fn of this.listeners) {
+          try {
+            const done = fn(line);
+            if (!done) next.push(fn);
+          } catch {
+            // drop that listener on error
+          }
+        }
+        this.listeners = next;
+      }
     }
-    const r = this.pendingResolvers.shift();
-    if (r) r(line);
   }
-
   private waitFor(predicate: (line: string) => boolean, timeoutMs = 5000): Promise<string> {
     return new Promise<string>((resolve, reject) => {
-      const timer = setTimeout(() => reject(new Error("StockfishService timeout")), timeoutMs);
-      const tryResolve = (line: string) => {
+      const timer = setTimeout(() => {
+        // remove our listener on timeout
+        this.listeners = this.listeners.filter((fn) => fn !== listener);
+        reject(new Error("StockfishService timeout"));
+      }, timeoutMs);
+
+      const listener = (line: string) => {
         if (predicate(line)) {
           clearTimeout(timer);
           resolve(line);
-          return true;
+          return true; // remove this listener
         }
-        return false;
+        return false; // keep listening
       };
-      this.pendingResolvers.push((line) => {
-        if (!tryResolve(line)) {
-          this.pendingResolvers.unshift((next) => {
-            if (tryResolve(next)) return;
-          });
-        }
-      });
+
+      this.listeners.push(listener);
     });
   }
-
   private parseInfo(line: string) {
     const parts = line.split(/\s+/);
     let pvStart = parts.indexOf("pv");
     if (pvStart >= 0) this.lastInfo.pv = parts.slice(pvStart + 1);
-
     const d = parts.indexOf("depth");
     if (d >= 0 && parts[d + 1]) this.lastInfo.depth = Number(parts[d + 1]);
-
     const n = parts.indexOf("nodes");
     if (n >= 0 && parts[n + 1]) this.lastInfo.nodes = Number(parts[n + 1]);
-
     const s = parts.indexOf("score");
     if (s >= 0) {
       const kind = parts[s + 1];

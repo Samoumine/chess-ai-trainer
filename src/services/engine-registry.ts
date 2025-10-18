@@ -1,8 +1,8 @@
-import type {
-    Engine, EngineKind, EngineOptions, PositionInfo, Recommendation
-} from "../engine/types";
-
 import { NullEngine } from "../engine/null-engine";
+import { StockfishEngine } from "../engine/stockfish-adapter";
+import type {
+  Engine, EngineKind, EngineOptions, PositionInfo, Recommendation
+} from "../engine/types";
 
 class EngineRegistry {
   private current: Engine | null = null;
@@ -15,12 +15,16 @@ class EngineRegistry {
     }
 
     if (this.current) {
-      await this.current.dispose().catch(() => {});
+      await this.current.dispose().catch(() => { });
       this.current = null;
       this.currentKind = null;
     }
 
-    const engine = new NullEngine(kind);
+    const engine =
+      kind === "stockfish"
+        ? new StockfishEngine("/engines/stockfish/stockfish.wasm.js")
+        : new NullEngine(kind);
+        
     await engine.init();
     if (opts) engine.setOptions(opts);
 
@@ -48,7 +52,7 @@ class EngineRegistry {
   }
 
   async dispose() {
-    if (this.current) await this.current.dispose().catch(() => {});
+    if (this.current) await this.current.dispose().catch(() => { });
     this.current = null;
     this.currentKind = null;
   }
