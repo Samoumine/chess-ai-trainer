@@ -5,6 +5,7 @@ import { BoardSquare, game } from "../lib/chess";
 import "../services/engine-registry";
 import { engine } from "../services/engine-singleton";
 import { MinimaxEngine } from "../services/MinimaxEngine";
+import { StockfishService } from "../services/StockfishService.web";
 import GameStatus from "./GameStatus";
 import PromotionPicker from "./PromotionPicker";
 
@@ -15,6 +16,7 @@ export default function ChessBoard() {
     const [selected, setSelected] = useState<string | null>(null);
     const [targets, setTargets] = useState<Set<string>>(new Set());
 
+    const STOCKFISH_URL = "/engines/stockfish/stockfish-17.1-lite-single-03e3232.js";
     const engineRef = React.useRef<MinimaxEngine | null>(null);
     const engineReadyRef = React.useRef(false);
     const [engineOn, setEngineOn] = React.useState(false);
@@ -277,44 +279,87 @@ export default function ChessBoard() {
     }, [requestEngineMove]);
 
     const startEngine = React.useCallback(async () => {
-        if (engineRef.current) return; // already running
+        if (engineRef.current) return;
         console.log("[ENG] starting...");
-        const eng = new MinimaxEngine();
-        engineRef.current = eng;
         engineReadyRef.current = false;
         setEngineReady(false);
+        setEngineIdName("(unknown)");
 
-        await eng.start();
-        eng.onMessage(line => {
-            console.log("[ENG]", line);
-            if (typeof line === "string" && line.startsWith("bestmove")) {
-                const uci = line.split(/\s+/)[1];
-                console.log("[ENG] bestmove", uci);
-                if (!uci || uci === "(none)") return;
-                if (game.isGameOver()) { console.log("[ENG] abort: game over"); return; }
-                if (game.turn() !== engineSide) { console.log("[ENG] abort: not engine turn"); return; }
-                const ok = executeMove(uci.slice(0, 2), uci.slice(2, 4), uci[4] as any);
-                console.log("[ENG] applied", { ok, uci });
+        try {
+            let eng: any;
+            if (engineKind === "stockfish") {
+                eng = new StockfishService(STOCKFISH_URL);
+                await eng.init?.();
+            } else {
+                eng = new MinimaxEngine();
+                await eng.start?.();
             }
-        });
 
-        // Handshake
-        eng.send("uci");
-        eng.send("isready");
-        eng.send("ucinewgame");
+            engineRef.current = eng;
 
-        // Mark ready
-        engineReadyRef.current = true;
-        setEngineReady(true);
+            // 🔹 1) Attach message listener (StockfishService vs MinimaxEngine)
+            const attachListener = (handler: (line: string) => void) => {
+                if (typeof eng.onMessage === "function") {
+                    // MinimaxEngine pattern
+                    eng.onMessage(handler);
+                } else if (typeof eng.addListener === "function") {
+                    // Alternate pattern
+                    eng.addListener(handler);
+                } else if ("onLine" in eng) {
+                    // Some StockfishService builds use direct property assignment
+                    eng.onLine = handler;
+                } else if (eng.worker && "onmessage" in eng.worker) {
+                    // If it wraps a Worker, attach directly
+                    eng.worker.onmessage = (e: MessageEvent) => handler(e.data);
+                } else {
+                    console.warn("[ENG] No known listener API on engine");
+                }
+            };
 
-        // If it's already engine's turn, kick once
-        if (!game.isGameOver() && game.turn() === engineSide) {
-            setTimeout(() => {
-                console.log("[KICK] engine to move now (ready)");
-                requestEngineMove();
-            }, 0);
+            attachListener((line: string) => {
+                console.log("[ENG]", line);
+
+                if (/^id name\s+/i.test(line)) {
+                    const m = /^id name\s+(.+)$/i.exec(line);
+                    if (m) setEngineIdName(m[1].trim());
+                }
+
+                if (line.startsWith("bestmove")) {
+                    const uci = line.split(/\s+/)[1];
+                    console.log("[ENG] bestmove", uci);
+                    if (!uci || uci === "(none)") return;
+                    if (game.isGameOver()) return;
+                    if (game.turn() !== engineSide) return;
+                    const ok = executeMove(uci.slice(0, 2), uci.slice(2, 4), uci[4] as any);
+                    console.log("[ENG] applied", { ok, uci });
+                }
+            });
+
+            // 🔹 2) Standard UCI handshake
+            eng.send("uci");
+            eng.send("isready");
+            eng.send("ucinewgame");
+
+            // 🔹 3) Mark ready
+            engineReadyRef.current = true;
+            setEngineReady(true);
+
+            // 🔹 4) Kick if it's engine's turn
+            if (!game.isGameOver() && game.turn() === engineSide) {
+                console.log("[KICK] engine to move now (ready; debounced)");
+                scheduleEngineThink();
+            }
+        } catch (err) {
+            console.error("[ENG] failed to start:", err);
+            try { engineRef.current?.stop?.(); } catch { }
+            engineRef.current = null;
+            engineReadyRef.current = false;
+            setEngineReady(false);
+            setEngineIdName("(unknown)");
         }
-    }, [engineSide, requestEngineMove]);
+    }, [engineKind, engineSide, scheduleEngineThink, executeMove]);
+
+
 
     const stopEngine = React.useCallback(() => {
         console.log("[ENG] stopping...");
