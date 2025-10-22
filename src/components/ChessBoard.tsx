@@ -5,7 +5,6 @@ import { BoardSquare, game } from "../lib/chess";
 import { engine } from "../services/engine-singleton";
 import { MinimaxEngine } from "../services/MinimaxEngine";
 import GameStatus from "./GameStatus";
-import LevelSwitch from "./LevelSwitch";
 import PromotionPicker from "./PromotionPicker";
 
 
@@ -93,7 +92,7 @@ export default function ChessBoard() {
 
         // 4) Non-promotion move — let executeMove do everything (sounds/status/engine)
         const ok = executeMove(selected, a);
-        if (ok) requestEngineMove();
+        if (ok) scheduleEngineThink();
     };
 
 
@@ -128,7 +127,7 @@ export default function ChessBoard() {
         setSelected(null);
         setTargets(new Set());
         setStatus(readStatus()); // if you're using the status-props approach
-        requestEngineMove();
+        scheduleEngineThink();
     };
 
     const onCancelPromotion = () => setPromo(null);
@@ -179,7 +178,7 @@ export default function ChessBoard() {
                             : sndMoveSelf;
         played.replayAsync().catch(() => { });
         console.log("[MOVE] executed", { from, to, promotion, nextTurn: game.turn() });
-        requestEngineMove();
+        scheduleEngineThink();
         return true;
     };
 
@@ -242,6 +241,17 @@ export default function ChessBoard() {
         console.log("[REQ] go movetime 800");
         eng.send("go movetime 800");
     }, [engineOn, engineSide]);
+
+    const thinkTimerRef = React.useRef<any>(null);
+    const scheduleEngineThink = React.useCallback(() => {
+        if (thinkTimerRef.current) {
+            clearTimeout(thinkTimerRef.current);
+            thinkTimerRef.current = null;
+        }
+        thinkTimerRef.current = setTimeout(() => {
+            requestEngineMove();
+        }, 150);
+    }, [requestEngineMove]);
 
     const startEngine = React.useCallback(async () => {
         if (engineRef.current) return; // already running
@@ -429,7 +439,7 @@ export default function ChessBoard() {
                 onCancel={onCancelPromotion}
             />
             <GameStatus status={status} />
-            <View style={{ marginTop: 8, flexDirection: "row", gap: 8, justifyContent: "center" }}>
+            {/* <View style={{ marginTop: 8, flexDirection: "row", gap: 8, justifyContent: "center" }}>
                 <Pressable
                     onPress={async () => {
                         if (engineOn) {
@@ -475,11 +485,11 @@ export default function ChessBoard() {
                 >
                     <Text style={{ color: "#fff" }}>Think now</Text>
                 </Pressable>
-            </View>
+            </View> */}
             {/* Level switch row */}
-            <View style={{ padding: 12 }}>
+            {/* <View style={{ padding: 12 }}>
                 <LevelSwitch value={level} onChange={setLevel} />
-            </View>
+            </View> */}
         </View>
     );
 }
@@ -533,12 +543,11 @@ function algebraic(r: number, c: number) {
 
 function PieceGlyph({ sq }: { sq: BoardSquare | null }) {
     if (!sq) return null;
-    const map: Record<string, string> = {
-        p: "♟", r: "♜", n: "♞", b: "♝", q: "♛", k: "♚",
-    };
-    const glyph = map[sq.type] ?? "?";
-    const color = sq.color === "w" ? "#fff" : "#111";
-    // personalize: pick colors (e.g., "#e6e6e6" for white, "#333" for black)
+    const blackMap: Record<string, string> = { p: "♙", r: "♖", n: "♘", b: "♗", q: "♕", k: "♔" };
+    const whiteMap: Record<string, string> = { p: "♟", r: "♜", n: "♞", b: "♝", q: "♛", k: "♚" };
+    const glyph = (sq.color === "w" ? whiteMap : blackMap)[sq.type] ?? "?";
+    // You can still tint slightly if you want; but glyph choice now carries the color semantics.
+    const color = sq.color === "w" ? "#eaeaea" : "#111";
     return <Text style={{ fontSize: 28, color }}>{glyph}</Text>;
 }
 
