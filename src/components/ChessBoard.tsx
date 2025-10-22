@@ -2,6 +2,7 @@ import { Audio } from "expo-av";
 import React, { useState } from "react";
 import { Pressable, Text, View } from "react-native";
 import { BoardSquare, game } from "../lib/chess";
+import "../services/engine-registry";
 import { engine } from "../services/engine-singleton";
 import { MinimaxEngine } from "../services/MinimaxEngine";
 import GameStatus from "./GameStatus";
@@ -19,6 +20,7 @@ export default function ChessBoard() {
     const [engineOn, setEngineOn] = React.useState(false);
     const [engineSide, setEngineSide] = React.useState<"w" | "b">("b");
     const [engineKind, setEngineKind] = React.useState<"stockfish" | "myengine">("stockfish");
+    const [engineIdName, setEngineIdName] = React.useState<string>("(unknown)");
     // optional UI-only mirror of readiness:
     const [engineReady, setEngineReady] = React.useState(false);
 
@@ -242,6 +244,26 @@ export default function ChessBoard() {
         console.log("[REQ] go movetime 800");
         eng.send("go movetime 800");
     }, [engineOn, engineSide]);
+
+    React.useEffect(() => {
+        const handleUciLine = (line: string) => {
+            const m = /^id name\s(.)$/.exec(line);
+            if (m) setEngineIdName(m[1].trim());
+        };
+        (window as any).__handleUciLine = handleUciLine;
+        return () => { delete (window as any).__handleUciLine; };
+    }, []);
+
+    // Expose lightweight debug info for console
+    React.useEffect(() => {
+        (window as any).__boardDebug = {
+            engineOn, engineSide, // "w" | "b"
+            engineKind,           // "stockfish" | "myengine" (UI label for now)
+            engineIdName,         // parsed from UCI "id name"
+        };
+        (window as any).__engineWorker = engineRef.current; // your UCI service instance
+    }, [engineOn, engineSide, engineKind, engineIdName]);
+
 
     const thinkTimerRef = React.useRef<any>(null);
     const scheduleEngineThink = React.useCallback(() => {
@@ -511,6 +533,13 @@ export default function ChessBoard() {
                     >
                         <Text style={{ color: "#fff" }}>MyEngine</Text>
                     </Pressable>
+                </View>
+
+                {/* Live status label (truth from the engine's own UCI "id name") */}
+                <View style={{ paddingHorizontal: 10, paddingVertical: 8, backgroundColor: "#222", borderRadius: 10 }}>
+                    <Text style={{ color: "#bbb", fontSize: 12 }}>
+                        Active Engine: {engineIdName}
+                    </Text>
                 </View>
 
                 {/* Hint (two-stage) — placeholder for now*/}
