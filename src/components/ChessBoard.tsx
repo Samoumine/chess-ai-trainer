@@ -368,6 +368,61 @@ export default function ChessBoard() {
         setEngineReady(false);
     }, []);
 
+    // ── Tiny presentational helpers ─────────────────────────────────────────
+    function Label({ children }: { children: React.ReactNode }) {
+        return <Text style={{ color: "#bbb", fontSize: 12, marginRight: 6 }}>{children}</Text>;
+    }
+    function Pill({ children, tone = "default" as "default" | "warn" | "muted" }: { children: React.ReactNode, tone?: "default" | "warn" | "muted" }) {
+        const tones = {
+            default: { bg: "#222", fg: "#bbb" },
+            warn: { bg: "#402a2a", fg: "#f2b4b4" },
+            muted: { bg: "#2a2a2a", fg: "#888" },
+        }[tone];
+        return (
+            <View style={{
+                backgroundColor: tones.bg,
+                borderRadius: 10,
+                paddingHorizontal: 10,
+                paddingVertical: 6,
+                marginRight: 8
+            }}>
+                <Text style={{ color: tones.fg, fontSize: 12 }}>{children}</Text>
+            </View>
+        );
+    }
+
+    const styles = {
+        controls: {
+            marginTop: 12,
+            minWidth: 720,
+            maxWidth: 980,
+            alignSelf: "center" as const,
+            gap: 10,
+        },
+        row: {
+            flexDirection: "row" as const,
+            alignItems: "center" as const,
+            justifyContent: "flex-start" as const,
+            columnGap: 12,
+        },
+        group: {
+            flexDirection: "row" as const,
+            alignItems: "center" as const,
+            columnGap: 8,
+        },
+        btn: {
+            backgroundColor: "#444",
+            paddingHorizontal: 12,
+            paddingVertical: 8,
+            borderRadius: 10,
+        },
+        btnText: { color: "#fff" },
+        btnAccent: { backgroundColor: "#2b4d9a" },
+        btnOn: { backgroundColor: "#265d2a" },
+        btnOff: { backgroundColor: "#444" },
+    };
+
+
     return (
 
         <View style={{ alignItems: "center", justifyContent: "center", paddingTop: 20 }}>
@@ -428,110 +483,134 @@ export default function ChessBoard() {
                 onCancel={onCancelPromotion}
             />
             <GameStatus status={status} />
-            <View style={{ marginTop: 8, flexDirection: "row", gap: 8, justifyContent: "center" }}>
-                {/* Engine turn ON/OFF switcher (UI only for now) */}
-                <Pressable
-                    onPress={async () => {
-                        if (engineOn) {
-                            setEngineOn(false);
-                            stopEngine();
-                        } else {
-                            setEngineOn(true);
-                            await startEngine();
-                        }
-                    }}
-                    style={{ backgroundColor: engineOn ? "#265d2a" : "#444", paddingHorizontal: 12, paddingVertical: 8, borderRadius: 10 }}
-                >
-                    <Text style={{ color: "#fff", fontWeight: "600" }}>
-                        {engineOn ? "Engine: ON" : "Engine: OFF"}
-                    </Text>
-                </Pressable>
-                {/* Engine Color switcher (UI only for now) */}
-                <Pressable
-                    onPress={() => {
-                        setEngineSide(s => {
-                            const next = s === "w" ? "b" : "w";
-                            // If engine is ON and it becomes engine's turn after switching, kick
-                            setTimeout(() => {
-                                if (engineOn && !game.isGameOver() && game.turn() === next) {
-                                    console.log("[KICK] side switched; engine to move now");
-                                    scheduleEngineThink();
-                                }
-                            }, 0);
-                            return next;
-                        });
-                    }}
-                    disabled={engineOn} // you can allow switching live if you prefer
-                    style={{ backgroundColor: "#333", paddingHorizontal: 12, paddingVertical: 8, borderRadius: 10, opacity: engineOn ? 0.5 : 1 }}
-                >
-                    <Text style={{ color: "#fff" }}>
-                        Engine plays: {engineSide === "w" ? "White" : "Black"}
-                    </Text>
-                </Pressable>
+            <View style={styles.controls}>
 
-                {/* Engine Kind switcher (UI only for now) */}
-                <View style={{ paddingHorizontal: 10, paddingVertical: 8, backgroundColor: "#222", borderRadius: 10 }}>
-                    <Text style={{ color: "#bbb", fontSize: 12 }}>Engine:</Text>
-                </View>
-                <View style={{ flexDirection: "row", gap: 6 }}>
-                    <Pressable
-                        onPress={() => setEngineKind("stockfish")}
-                        style={{
-                            backgroundColor: engineKind === "stockfish" ? "#2b4d9a" : "#444",
-                            paddingHorizontal: 12, paddingVertical: 8, borderRadius: 10
-                        }}
-                    >
-                        <Text style={{ color: "#fff" }}>Stockfish</Text>
-                    </Pressable>
-                    <Pressable
-                        onPress={() => setEngineKind("myengine")}
-                        style={{
-                            backgroundColor: engineKind === "myengine" ? "#2b4d9a" : "#444",
-                            paddingHorizontal: 12, paddingVertical: 8, borderRadius: 10,
-                            opacity: engineOn ? 0.6 : 1
-                        }}
-                    >
-                        <Text style={{ color: "#fff" }}>MyEngine</Text>
-                    </Pressable>
-                </View>
+                {/* Row 1: Turn + Hint */}
+                <View style={styles.row}>
+                    <View style={styles.group}>
+                        <Label>Turn:</Label>
+                        <Pill>{status.turn === "w" ? "White" : "Black"}</Pill>
+                        {status.isMate && <Pill tone="warn">Checkmate</Pill>}
+                        {status.isDrawn && !status.isMate && <Pill tone="muted">Drawn</Pill>}
+                        {status.isCheck && !status.isMate && <Pill tone="warn">Check</Pill>}
+                    </View>
 
-                {/* ── Difficulty ───────────────────── */}
-                <View style={{ paddingHorizontal: 10, paddingVertical: 8, backgroundColor: "#222", borderRadius: 10 }}>
-                    <Text style={{ color: "#bbb", fontSize: 12 }}>Difficulty:</Text>
-                </View>
-                <View style={{ flexDirection: "row", gap: 6 }}>
-                    {(["beginner", "intermediate", "hard"] as const).map((lvl) => (
+                    <View style={[styles.group, { marginLeft: "auto" }]}>
+                        <Label>Hint:</Label>
                         <Pressable
-                            key={lvl}
-                            onPress={() => setDifficulty(lvl)}
-                            style={{
-                                backgroundColor: difficulty === lvl ? "#2b4d9a" : "#444",
-                                paddingHorizontal: 12, paddingVertical: 8, borderRadius: 10
+                            onPress={() => {
+                                console.log("[HINT] stage A → recommend a piece (to be wired later)");
                             }}
+                            style={styles.btn}
                         >
-                            <Text style={{ color: "#fff" }}>{lvl}</Text>
+                            <Text style={styles.btnText}>Get hint</Text>
                         </Pressable>
-                    ))}
+                    </View>
                 </View>
 
-                {/* Live status label (truth from the engine's own UCI "id name") */}
-                <View style={{ paddingHorizontal: 10, paddingVertical: 8, backgroundColor: "#222", borderRadius: 10 }}>
-                    <Text style={{ color: "#bbb", fontSize: 12 }}>
-                        Active Engine: {engineIdName}
-                    </Text>
+                {/* Row 2: Engine ON/OFF + Engine plays */}
+                <View style={styles.row}>
+                    <View style={styles.group}>
+                        <Label>Engine:</Label>
+                        <Pressable
+                            onPress={async () => {
+                                if (engineOn) {
+                                    setEngineOn(false);
+                                    stopEngine();
+                                } else {
+                                    setEngineOn(true);
+                                    await startEngine();
+                                }
+                            }}
+                            style={[
+                                styles.btn,
+                                engineOn ? styles.btnOn : styles.btnOff,
+                            ]}
+                        >
+                            <Text style={styles.btnText}>{engineOn ? "ON" : "OFF"}</Text>
+                        </Pressable>
+                    </View>
+
+                    <View style={styles.group}>
+                        <Label>Engine plays:</Label>
+                        <Pressable
+                            onPress={() => {
+                                setEngineSide((s) => {
+                                    const next = s === "w" ? "b" : "w";
+                                    setTimeout(() => {
+                                        if (engineOn && !game.isGameOver() && game.turn() === next) {
+                                            scheduleEngineThink();
+                                        }
+                                    }, 0);
+                                    return next;
+                                });
+                            }}
+                            disabled={engineOn}
+                            style={[
+                                styles.btn,
+                                engineOn && { opacity: 0.5 },
+                            ]}
+                        >
+                            <Text style={styles.btnText}>{engineSide === "w" ? "White" : "Black"}</Text>
+                        </Pressable>
+                    </View>
                 </View>
 
-                {/* Hint (two-stage) — placeholder for now*/}
-                <Pressable
-                    onPress={() => {
-                        console.log("[HINT] stage A → recommend a piece (to be wired in hints milestone)");
-                        // Next press: commit best move using that piece — coming later.
-                    }}
-                    style={{ backgroundColor: "#555", paddingHorizontal: 12, paddingVertical: 8, borderRadius: 10 }}
-                >
-                    <Text style={{ color: "#fff" }}>Hint</Text>
-                </Pressable>
+                {/* Row 3: Engine kind + Difficulty + Active engine name */}
+                <View style={[styles.row, { flexWrap: "wrap", rowGap: 8 }]}>
+                    <View style={styles.group}>
+                        <Label>Engine:</Label>
+                        <Pressable
+                            disabled={engineOn}
+                            onPress={() => {
+                                if (engineOn) return; // UI guard: do nothing while ON
+                                setEngineKind("stockfish");
+                            }}
+                            style={[
+                                styles.btn,
+                                engineKind === "stockfish" ? styles.btnAccent : null,
+                                engineOn && { opacity: 0.5 }, // visual lock
+                            ]}
+                        >
+                            <Text style={styles.btnText}>Stockfish</Text>
+                        </Pressable>
+                        <Pressable
+                            disabled={engineOn}
+                            onPress={() => {
+                                if (engineOn) return; // UI guard: do nothing while ON
+                                setEngineKind("myengine");
+                            }}
+                            style={[
+                                styles.btn,
+                                engineKind === "myengine" ? styles.btnAccent : null,
+                                engineOn && { opacity: 0.5 }, // visual lock
+                            ]}
+                        >
+                            <Text style={styles.btnText}>MyEngine</Text>
+                        </Pressable>
+                    </View>
+
+                    <View style={[styles.group, { marginLeft: 16 }]}>
+                        <Label>Difficulty:</Label>
+                        {(["beginner", "intermediate", "hard"] as const).map((lvl) => (
+                            <Pressable
+                                key={lvl}
+                                onPress={() => setDifficulty(lvl)}
+                                style={[styles.btn, difficulty === lvl ? styles.btnAccent : null]}
+                            >
+                                <Text style={styles.btnText}>{lvl}</Text>
+                            </Pressable>
+                        ))}
+                    </View>
+
+                    <View style={[styles.group, { marginLeft: "auto" }]}>
+                        <Label>Active Engine:</Label>
+                        <Pill>{engineIdName}</Pill>
+                    </View>
+                </View>
+
             </View>
+
         </View>
     );
 }
