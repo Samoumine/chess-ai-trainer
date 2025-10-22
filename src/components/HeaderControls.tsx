@@ -33,7 +33,11 @@ export function HeaderControls() {
       gap: 12,
       padding: "8px 12px",
       borderBottom: "1px solid #222",
-      background: "#111"
+      background: "#111",
+      position: "sticky",    
+      top: 0,
+      zIndex: 1000,          
+      pointerEvents: "auto", 
     }}>
       {/* --- Engine kind selector ------------------------------------------------ */}
       <label style={{ color: "#ddd" }}>

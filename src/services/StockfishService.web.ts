@@ -16,7 +16,7 @@ export class StockfishService {
   private listeners: Array<(line: string) => boolean> = [];
   private lastInfo: Partial<GoResult> = {};
 
-  constructor(private workerUrl: string = "/engines/stockfish/stockfish.wasm.js") { }
+  constructor(private workerUrl: string = "/engines/stockfish/stockfish-17.1-lite-single-03e3232.js") { }
 
   async init(): Promise<void> {
     if (this.worker) return;

@@ -22,7 +22,7 @@ class EngineRegistry {
 
     const engine =
       kind === "stockfish"
-        ? new StockfishEngine("/engines/stockfish/stockfish.wasm.js")
+        ? new StockfishEngine("/engines/stockfish/stockfish-17.1-lite-single-03e3232.js")
         : new NullEngine(kind);
         
     await engine.init();

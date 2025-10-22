@@ -26,7 +26,7 @@ export class StockfishEngine implements Engine {
     private sf: StockfishService | null = null;
     private opts: EngineOptions = {};
 
-    constructor(private workerUrl = "/engines/stockfish/stockfish.wasm.js") { }
+    constructor(private workerUrl = "/engines/stockfish/stockfish-17.1-lite-single-03e3232.js") { }
 
     async init(): Promise<void> {
         this.sf = new StockfishService(this.workerUrl);
