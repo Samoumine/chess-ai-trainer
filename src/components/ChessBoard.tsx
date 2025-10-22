@@ -18,6 +18,7 @@ export default function ChessBoard() {
     const engineReadyRef = React.useRef(false);
     const [engineOn, setEngineOn] = React.useState(false);
     const [engineSide, setEngineSide] = React.useState<"w" | "b">("b");
+    const [engineKind, setEngineKind] = React.useState<"stockfish" | "myengine">("stockfish");
     // optional UI-only mirror of readiness:
     const [engineReady, setEngineReady] = React.useState(false);
 
@@ -301,6 +302,15 @@ export default function ChessBoard() {
         setEngineReady(false);
     }, []);
 
+    React.useEffect(() => {
+        if (engineOn && engineKind === "myengine") {
+            console.warn("[Engine] MyEngine not wired yet here. Turning engine OFF.");
+            setEngineOn(false);
+            stopEngine(); // your existing teardown
+            // (Optional) toast: "MyEngine coming soon"
+        }
+    }, [engineKind]);
+
 
     React.useEffect(() => {
         if (engineOn && engineSide === "w" && !game.isGameOver() && game.turn() === "w") {
@@ -439,7 +449,8 @@ export default function ChessBoard() {
                 onCancel={onCancelPromotion}
             />
             <GameStatus status={status} />
-            {/* <View style={{ marginTop: 8, flexDirection: "row", gap: 8, justifyContent: "center" }}>
+            <View style={{ marginTop: 8, flexDirection: "row", gap: 8, justifyContent: "center" }}>
+                {/* Engine turn ON/OFF switcher (UI only for now) */}
                 <Pressable
                     onPress={async () => {
                         if (engineOn) {
@@ -456,7 +467,7 @@ export default function ChessBoard() {
                         {engineOn ? "Engine: ON" : "Engine: OFF"}
                     </Text>
                 </Pressable>
-
+                {/* Engine Color switcher (UI only for now) */}
                 <Pressable
                     onPress={() => {
                         setEngineSide(s => {
@@ -465,7 +476,7 @@ export default function ChessBoard() {
                             setTimeout(() => {
                                 if (engineOn && !game.isGameOver() && game.turn() === next) {
                                     console.log("[KICK] side switched; engine to move now");
-                                    requestEngineMove();
+                                    scheduleEngineThink();
                                 }
                             }, 0);
                             return next;
@@ -479,13 +490,40 @@ export default function ChessBoard() {
                     </Text>
                 </Pressable>
 
+                {/* Engine Kind switcher (UI only for now) */}
+                <View style={{ flexDirection: "row", gap: 6 }}>
+                    <Pressable
+                        onPress={() => setEngineKind("stockfish")}
+                        style={{
+                            backgroundColor: engineKind === "stockfish" ? "#2b4d9a" : "#444",
+                            paddingHorizontal: 12, paddingVertical: 8, borderRadius: 10
+                        }}
+                    >
+                        <Text style={{ color: "#fff" }}>Stockfish</Text>
+                    </Pressable>
+                    <Pressable
+                        onPress={() => setEngineKind("myengine")}
+                        style={{
+                            backgroundColor: engineKind === "myengine" ? "#2b4d9a" : "#444",
+                            paddingHorizontal: 12, paddingVertical: 8, borderRadius: 10,
+                            opacity: engineOn ? 0.6 : 1
+                        }}
+                    >
+                        <Text style={{ color: "#fff" }}>MyEngine</Text>
+                    </Pressable>
+                </View>
+
+                {/* Hint (two-stage) — placeholder for now*/}
                 <Pressable
-                    onPress={() => requestEngineMove()}
+                    onPress={() => {
+                        console.log("[HINT] stage A → recommend a piece (to be wired in hints milestone)");
+                        // Next press: commit best move using that piece — coming later.
+                    }}
                     style={{ backgroundColor: "#555", paddingHorizontal: 12, paddingVertical: 8, borderRadius: 10 }}
                 >
-                    <Text style={{ color: "#fff" }}>Think now</Text>
+                    <Text style={{ color: "#fff" }}>Hint</Text>
                 </Pressable>
-            </View> */}
+            </View>
             {/* Level switch row */}
             {/* <View style={{ padding: 12 }}>
                 <LevelSwitch value={level} onChange={setLevel} />
