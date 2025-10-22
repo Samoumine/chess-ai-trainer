@@ -2,8 +2,6 @@ import { Audio } from "expo-av";
 import React, { useState } from "react";
 import { Pressable, Text, View } from "react-native";
 import { BoardSquare, game } from "../lib/chess";
-import "../services/engine-registry";
-import { engine } from "../services/engine-singleton";
 import { MinimaxEngine } from "../services/MinimaxEngine";
 import { StockfishService } from "../services/StockfishService.web";
 import GameStatus from "./GameStatus";
@@ -17,12 +15,13 @@ export default function ChessBoard() {
     const [targets, setTargets] = useState<Set<string>>(new Set());
 
     const STOCKFISH_URL = "/engines/stockfish/stockfish-17.1-lite-single-03e3232.js";
-    const engineRef = React.useRef<MinimaxEngine | null>(null);
+    const engineRef = React.useRef<any | null>(null);
     const engineReadyRef = React.useRef(false);
     const [engineOn, setEngineOn] = React.useState(false);
     const [engineSide, setEngineSide] = React.useState<"w" | "b">("b");
     const [engineKind, setEngineKind] = React.useState<"stockfish" | "myengine">("stockfish");
     const [engineIdName, setEngineIdName] = React.useState<string>("(unknown)");
+    const [difficulty, setDifficulty] = React.useState<"beginner" | "intermediate" | "hard">("intermediate");
     // optional UI-only mirror of readiness:
     const [engineReady, setEngineReady] = React.useState(false);
 
@@ -44,9 +43,17 @@ export default function ChessBoard() {
     const [sndIllegal] = useState(() => new Audio.Sound());
     const [sndGameEnd] = useState(() => new Audio.Sound());
 
-
-    type Level = "beginner" | "intermediate" | "hard";
-    const [level, setLevel] = React.useState<Level>("beginner");
+    // Difficulty → skill & movetime (single source of truth)
+    const mapDifficultyToSkill = React.useCallback((d: typeof difficulty) => {
+        if (d === "beginner") return 3;
+        if (d === "intermediate") return 10;
+        return 18; // hard
+    }, []);
+    const mapDifficultyToMovetime = React.useCallback((d: typeof difficulty) => {
+        if (d === "beginner") return 300;
+        if (d === "intermediate") return 800;
+        return 1500; // hard
+    }, []);
 
     const onSquarePress = (a: string) => {
         const b = game.board();
@@ -187,19 +194,6 @@ export default function ChessBoard() {
         return true;
     };
 
-
-    const skillFor = (lv: Level) => (lv === "beginner" ? 0 : lv === "intermediate" ? 10 : 20);
-    const applyLevel = (lv: Level) => {
-        const eng = engineRef.current;
-        if (!eng) return;
-        const n = skillFor(lv);
-        eng.send(`setoption name Skill Level value ${n}`);
-        console.log(`[ui] level=${lv} -> skill=${n}`);
-    };
-
-    // whenever the level state changes, push it to engine
-    React.useEffect(() => { applyLevel(level); }, [level]);
-
     // ── Load sounds ───────────────────────────────────────────────────────────────
     React.useEffect(() => {
         (async () => {
@@ -243,18 +237,10 @@ export default function ChessBoard() {
         const fen = game.fen();
         console.log("[REQ] sending", { fen });
         eng.send("position fen " + fen);
-        console.log("[REQ] go movetime 800");
-        eng.send("go movetime 800");
-    }, [engineOn, engineSide]);
-
-    React.useEffect(() => {
-        const handleUciLine = (line: string) => {
-            const m = /^id name\s(.)$/.exec(line);
-            if (m) setEngineIdName(m[1].trim());
-        };
-        (window as any).__handleUciLine = handleUciLine;
-        return () => { delete (window as any).__handleUciLine; };
-    }, []);
+        const ms = mapDifficultyToMovetime(difficulty);
+        console.log("[REQ] go movetime", ms);
+        eng.send(`go movetime ${ms}`);
+    }, [engineOn, engineSide, difficulty, mapDifficultyToMovetime]);
 
     // Expose lightweight debug info for console
     React.useEffect(() => {
@@ -297,7 +283,7 @@ export default function ChessBoard() {
 
             engineRef.current = eng;
 
-            // 🔹 1) Attach message listener (StockfishService vs MinimaxEngine)
+            // Attach message listener (StockfishService vs MinimaxEngine)
             const attachListener = (handler: (line: string) => void) => {
                 if (typeof eng.onMessage === "function") {
                     // MinimaxEngine pattern
@@ -335,16 +321,19 @@ export default function ChessBoard() {
                 }
             });
 
-            // 🔹 2) Standard UCI handshake
+            // Standard UCI handshake
             eng.send("uci");
             eng.send("isready");
             eng.send("ucinewgame");
 
-            // 🔹 3) Mark ready
+            // Both engines support this setoption in your implementations
+            try { eng.send?.(`setoption name Skill Level value ${mapDifficultyToSkill(difficulty)}`); } catch { }
+
+            //  Mark ready
             engineReadyRef.current = true;
             setEngineReady(true);
 
-            // 🔹 4) Kick if it's engine's turn
+            // Kick if it's engine's turn
             if (!game.isGameOver() && game.turn() === engineSide) {
                 console.log("[KICK] engine to move now (ready; debounced)");
                 scheduleEngineThink();
@@ -357,9 +346,19 @@ export default function ChessBoard() {
             setEngineReady(false);
             setEngineIdName("(unknown)");
         }
-    }, [engineKind, engineSide, scheduleEngineThink, executeMove]);
+    }, [engineKind, engineSide, difficulty, mapDifficultyToSkill, scheduleEngineThink, executeMove]);
 
-
+    // If difficulty changes while engine is ON, push new Skill Level immediately.
+    React.useEffect(() => {
+        const eng = engineRef.current;
+        if (!eng || !engineOn) return;
+        const skill = mapDifficultyToSkill(difficulty);
+        try { eng.send?.(`setoption name Skill Level value ${skill}`); } catch { }
+        // Optional: if it's engine's turn, re-think under new settings
+        if (!game.isGameOver() && game.turn() === engineSide) {
+            scheduleEngineThink();
+        }
+    }, [difficulty, engineOn, engineSide, mapDifficultyToSkill, scheduleEngineThink]);
 
     const stopEngine = React.useCallback(() => {
         console.log("[ENG] stopping...");
@@ -368,93 +367,6 @@ export default function ChessBoard() {
         engineReadyRef.current = false;
         setEngineReady(false);
     }, []);
-
-    React.useEffect(() => {
-        if (engineOn && engineKind === "myengine") {
-            console.warn("[Engine] MyEngine not wired yet here. Turning engine OFF.");
-            setEngineOn(false);
-            stopEngine(); // your existing teardown
-            // (Optional) toast: "MyEngine coming soon"
-        }
-    }, [engineKind]);
-
-
-    React.useEffect(() => {
-        if (engineOn && engineSide === "w" && !game.isGameOver() && game.turn() === "w") {
-            requestEngineMove();
-        }
-        // run when engine toggled or side changes
-    }, [engineOn, engineSide, requestEngineMove]);
-
-    React.useEffect(() => {
-        if (engineOn && !game.isGameOver() && game.turn() === engineSide) {
-            console.log("[KICK] engine to move now");
-            requestEngineMove();
-        }
-    }, [engineOn, engineSide, requestEngineMove]);
-
-
-    React.useEffect(() => {
-
-        if (!engineOn) {
-            engineRef.current?.stop();
-            engineRef.current = null;
-            setEngineReady(false);
-            return;
-        }
-        const eng = new MinimaxEngine();
-        engineRef.current = eng;
-        (async () => {
-            await eng.start();
-            eng.onMessage(line => {
-                console.log("[ENG]", line);
-                // Parse bestmove
-                if (typeof line === "string" && line.startsWith("bestmove")) {
-                    const uci = line.split(/\s+/)[1];
-                    console.log("[ENG] bestmove", uci);
-                    if (!uci || uci === "(none)") return;
-                    if (game.isGameOver()) { console.log("[ENG] abort: game over"); return; }
-                    if (game.turn() !== engineSide) { console.log("[ENG] abort: not engine turn"); return; }
-                    const from = uci.slice(0, 2);
-                    const to = uci.slice(2, 4);
-                    const promotion = uci[4] as "q" | "r" | "b" | "n" | undefined;
-                    const ok = executeMove(from, to, promotion);
-                    console.log("[ENG] applied", { ok, from, to, promotion });
-                }
-            });
-            // UCI handshake (lightweight for our engine)
-            eng.send("uci");
-            eng.send("isready");
-            eng.send("ucinewgame");
-            setEngineReady(true);
-            // If it's already the engine's turn (e.g., engine plays White), kick once
-            if (!game.isGameOver() && game.turn() === engineSide) {
-                console.log("[KICK] engine to move now (ready)");
-                requestEngineMove(); // will pass the ready check below
-            }
-        })();
-        return () => {
-            engineRef.current?.stop();
-            engineRef.current = null;
-            setEngineReady(false);
-        };
-    }, [engineOn, engineSide]);
-
-    React.useEffect(() => {
-        const off = engine.onMessage((line) => {
-            if (!line.startsWith("bestmove ")) return;
-            const uci = line.slice(9).trim();          // e.g., "g8f6"
-            if (!uci || uci === "(none)" || game.isGameOver()) return;
-
-            const ok = game.moveUci(uci);
-            if (ok) {
-                // any sounds you want for engine moves can go here (optional)
-                setStatus(readStatus());                 // <- this is your re-render trigger
-            }
-        });
-        return () => off?.();
-    }, []);
-
 
     return (
 
@@ -558,6 +470,9 @@ export default function ChessBoard() {
                 </Pressable>
 
                 {/* Engine Kind switcher (UI only for now) */}
+                <View style={{ paddingHorizontal: 10, paddingVertical: 8, backgroundColor: "#222", borderRadius: 10 }}>
+                    <Text style={{ color: "#bbb", fontSize: 12 }}>Engine:</Text>
+                </View>
                 <View style={{ flexDirection: "row", gap: 6 }}>
                     <Pressable
                         onPress={() => setEngineKind("stockfish")}
@@ -580,6 +495,25 @@ export default function ChessBoard() {
                     </Pressable>
                 </View>
 
+                {/* ── Difficulty ───────────────────── */}
+                <View style={{ paddingHorizontal: 10, paddingVertical: 8, backgroundColor: "#222", borderRadius: 10 }}>
+                    <Text style={{ color: "#bbb", fontSize: 12 }}>Difficulty:</Text>
+                </View>
+                <View style={{ flexDirection: "row", gap: 6 }}>
+                    {(["beginner", "intermediate", "hard"] as const).map((lvl) => (
+                        <Pressable
+                            key={lvl}
+                            onPress={() => setDifficulty(lvl)}
+                            style={{
+                                backgroundColor: difficulty === lvl ? "#2b4d9a" : "#444",
+                                paddingHorizontal: 12, paddingVertical: 8, borderRadius: 10
+                            }}
+                        >
+                            <Text style={{ color: "#fff" }}>{lvl}</Text>
+                        </Pressable>
+                    ))}
+                </View>
+
                 {/* Live status label (truth from the engine's own UCI "id name") */}
                 <View style={{ paddingHorizontal: 10, paddingVertical: 8, backgroundColor: "#222", borderRadius: 10 }}>
                     <Text style={{ color: "#bbb", fontSize: 12 }}>
@@ -598,10 +532,6 @@ export default function ChessBoard() {
                     <Text style={{ color: "#fff" }}>Hint</Text>
                 </Pressable>
             </View>
-            {/* Level switch row */}
-            {/* <View style={{ padding: 12 }}>
-                <LevelSwitch value={level} onChange={setLevel} />
-            </View> */}
         </View>
     );
 }
